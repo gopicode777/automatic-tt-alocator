@@ -14,8 +14,8 @@
 // small server/edge function that holds the real key instead.
 // ---------------------------------------------------------------------------
 
-const GROK_API_URL = 'https://api.x.ai/v1/chat/completions';
-const GROK_MODEL = 'grok-4-fast-non-reasoning';
+const GROK_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
+const GROK_MODEL = 'openai/gpt-oss-120b';
 
 function apiKey() {
   return import.meta.env.VITE_GROK_API_KEY;
@@ -68,8 +68,9 @@ Hard rules:
 3. Never output two of your own entries with the same (dayOrderId, periodId) - one subject per period for this class.
 4. Only use a facultyId that is listed under that subject's "eligibleFaculty".
 5. Try to hit each subject's "weeklyHours" total (counting "alreadyScheduledHours" already on the books) as closely as possible across the whole week, spread across different day orders rather than stacked back-to-back on one day, but NEVER exceed it.
-6. type: "Lab" subjects should use a room whose type is "lab" when one is available; type: "Theory" subjects should use a room whose type is "classroom" when one is available. If no room of the matching type exists in the given room list, pick any available room rather than skip the subject.
-7. It is fine, and expected, to leave a cell empty (omit it) if no subject/faculty/room combination can be legally placed there.
+6. type: "Lab" subjects should use a room whose type is "lab" when one is available; type: "Theory" subjects should use a room whose type is "classroom" when one is available. If no room of the matching type exists in the given room list, pick any available room from the list rather than skip the subject.
+7. NEVER invent a roomId, facultyId, or subjectId that is not present in the lists given to you. If the "rooms" list is empty, you cannot place ANY entries for this class - return an empty JSON array "[]" instead of guessing a roomId.
+8. It is fine, and expected, to leave a cell empty (omit it) if no subject/faculty/room combination can be legally placed there.
 
 Output format - a JSON array only, each item exactly:
 {"dayOrderId": string, "periodId": string, "subjectId": string, "facultyId": string, "roomId": string, "type": "theory" | "lab"}`;

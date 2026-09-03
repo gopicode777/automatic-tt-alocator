@@ -1861,6 +1861,20 @@ function CreateTimetable({ state, actions, conflicts }) {
   const entriesForClass = classSection ? state.timetableEntries.filter((e) => e.classSectionId === classSection.id) : [];
   const periodSlots = state.periods.filter((p) => p.type === 'period');
 
+  // Subjects for this class section that have nobody assigned to teach them.
+  // Grok is never even shown these (buildPrompt drops any subject with an
+  // empty eligibleFaculty list), so they can never be auto-filled until
+  // master data is fixed - surface that up front instead of letting the
+  // person guess why the grid stayed empty.
+  const subjectsMissingFaculty = deptSubjects.filter((s) => !(s.facultyIds || []).length);
+
+  // Rooms Grok is allowed to place this class in. If this department has zero
+  // classrooms/labs in master data, Grok has nothing real to pick from and
+  // ends up inventing a roomId that fails validation on every single entry
+  // (surfaces as "unknown room \u00d7N" in the toast) - same class of problem
+  // as missing faculty, just on the room side.
+  const roomsForDept = [...state.classrooms, ...state.labs].filter((r) => r.departmentId === departmentId);
+
   async function generateWithAI() {
     if (!classSection || aiBusy) return;
     setAiBusy(true);
@@ -1868,19 +1882,44 @@ function CreateTimetable({ state, actions, conflicts }) {
       const { entries, skipped } = await generateTimetableWithAI({
         state, departmentId, classSection, deptSubjects, periodSlots,
       });
-      if (entries.length === 0) {
-        actions.toast(skipped.length ? 'Grok could not place any valid slots \u2014 check subjects have eligible faculty assigned.' : 'Nothing to fill \u2014 the grid is already complete.', 'critical');
+
+      // Always keep whatever Grok managed to place, however small - the
+      // remaining cells simply stay empty for manual entry rather than the
+      // whole run being thrown away because *some* slots couldn't be placed.
+      if (entries.length > 0) {
+        const next = {
+          ...state,
+          timetableEntries: [...state.timetableEntries, ...entries],
+        };
+        actions.persist(actions.logActivity(next, 'AI generated ' + entries.length + ' slot(s) for ' + departmentId + ' ' + year + section, { entityType: 'timetable', entityId: departmentId }));
+      }
+
+      if (entries.length === 0 && skipped.length === 0) {
+        actions.toast('Nothing to fill \u2014 the grid is already complete.', 'success');
         return;
       }
-      const next = {
-        ...state,
-        timetableEntries: [...state.timetableEntries, ...entries],
-      };
-      actions.persist(actions.logActivity(next, 'AI generated ' + entries.length + ' slot(s) for ' + departmentId + ' ' + year + section, { entityType: 'timetable', entityId: departmentId }));
-      actions.toast(
-        'Grok filled ' + entries.length + ' slot(s)' + (skipped.length ? ' (' + skipped.length + ' skipped as unschedulable).' : '.'),
-        'success'
-      );
+
+      if (skipped.length === 0) {
+        actions.toast('Grok filled ' + entries.length + ' slot(s).', 'success');
+        return;
+      }
+
+      // Summarize *why* the rest got skipped, so it's fixable instead of a
+      // dead end. Count reason frequency across all skipped items.
+      const reasonCounts = {};
+      skipped.forEach(({ reasons }) => reasons.forEach((r) => { reasonCounts[r] = (reasonCounts[r] || 0) + 1; }));
+      const topReasons = Object.entries(reasonCounts)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 2)
+        .map(([r, n]) => r + ' \u00d7' + n)
+        .join(', ');
+
+      const filledPart = entries.length > 0 ? 'Filled ' + entries.length + ' slot(s), left ' + skipped.length + ' empty' : 'Could not place any of the ' + skipped.length + ' slot(s) it tried';
+      const missingPart = subjectsMissingFaculty.length
+        ? ' \u2014 ' + subjectsMissingFaculty.length + ' subject(s) have no faculty assigned (' + subjectsMissingFaculty.map((s) => s.name).join(', ') + ')'
+        : (topReasons ? ' \u2014 mainly: ' + topReasons : '');
+
+      actions.toast(filledPart + missingPart + '. Remaining cells are left blank for manual entry.', entries.length > 0 ? 'warn' : 'critical');
     } catch (err) {
       actions.toast(err?.message || 'AI generation failed.', 'critical');
     } finally {
@@ -1944,6 +1983,23 @@ function CreateTimetable({ state, actions, conflicts }) {
                 </PrimaryButton>
               </div>
             </div>
+            {subjectsMissingFaculty.length > 0 && (
+              <div className="mb-3 flex items-start gap-2 rounded-lg border px-3 py-2 text-xs" style={{ borderColor: T.warn, background: T.warnTint, color: T.warn }}>
+                <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+                <span>
+                  {subjectsMissingFaculty.length} subject(s) have no faculty assigned yet, so AI generation will always leave those periods empty:{' '}
+                  <strong>{subjectsMissingFaculty.map((s) => s.name).join(', ')}</strong>. Assign faculty to them in Master Data {'\u2192'} Subjects first for a fuller auto-fill.
+                </span>
+              </div>
+            )}
+            {roomsForDept.length === 0 && (
+              <div className="mb-3 flex items-start gap-2 rounded-lg border px-3 py-2 text-xs" style={{ borderColor: T.critical, background: T.criticalTint, color: T.critical }}>
+                <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+                <span>
+                  <strong>{departmentId}</strong> has no classrooms or labs in Master Data. AI generation cannot place a single slot without a real room to assign{' \u2014 '}add at least one room for this department in Master Data{' \u2192 '}Rooms before generating.
+                </span>
+              </div>
+            )}
             <table className="w-full min-w-[720px] table-fixed border-collapse text-xs">
               <thead>
                 <tr>
